@@ -18,6 +18,7 @@ export default function Demo1() {
     audio.addEventListener("ended", () => {
       setPlaying(false);
     });
+
     const audioContext = (audioContextRef.current = new AudioContext());
     const track = audioContext.createMediaElementSource(audio);
 
@@ -37,8 +38,9 @@ export default function Demo1() {
     }
 
     if (!playing) {
-      audioRef.current?.play();
-      setPlaying(true);
+      audioRef.current?.play().then(() => {
+        setPlaying(true);
+      });
     } else {
       audioRef.current?.pause();
       setPlaying(false);
