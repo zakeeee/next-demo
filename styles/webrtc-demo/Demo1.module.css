@@ -1,0 +1,40 @@
+.tools {
+  padding: 16px;
+}
+
+.room {
+  display: flex;
+}
+
+.user-list {
+  width: 300px;
+  border: 1px solid black;
+}
+
+.user-list-item {
+  padding: 8px;
+  margin: 8px;
+  background-color: aquamarine;
+  cursor: pointer;
+}
+
+.video-wrapper {
+  position: relative;
+  width: 1024px;
+  height: 768px;
+  border: 1px solid black;
+  margin-left: 16px;
+}
+
+.local-video {
+  position: absolute;
+  border: 1px solid black;
+  width: 240px;
+  height: 180px;
+  z-index: 1;
+}
+
+.remote-video {
+  width: 1024px;
+  height: 768px;
+}
