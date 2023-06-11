@@ -1,11 +1,6 @@
 import Head from "next/head";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { io, Socket } from "socket.io-client";
 import styles from "../../styles/webrtc-demo/Demo1.module.css";
-
-type User = {
-  id: string;
-};
 
 type NewCallData = {
   from: string;
@@ -22,11 +17,19 @@ type NewIceCandidateData = {
   candidate: RTCIceCandidate | null;
 };
 
+function serialize(data: { type: string; payload: any }): string {
+  return JSON.stringify(data);
+}
+
+function deserialize(data: any): { type: string; payload: any } {
+  return JSON.parse(data.toString());
+}
+
 export default function Demo1() {
-  const socketRef = useRef<Socket | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
-  const [userList, setUserList] = useState<User[]>([]);
+  const [userIdList, setUserIdList] = useState<string[]>([]);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
 
@@ -59,10 +62,15 @@ export default function Demo1() {
 
       const pc = (pcRef.current = createPeerConnection());
       pc.onicecandidate = (e) => {
-        socketRef.current?.emit("new-ice-candidate", {
-          to: userId,
-          candidate: e.candidate,
-        });
+        socketRef.current?.send(
+          serialize({
+            type: "new-ice-candidate",
+            payload: {
+              to: userId,
+              candidate: e.candidate,
+            },
+          })
+        );
       };
 
       localStream.getTracks().forEach((track) => {
@@ -72,64 +80,57 @@ export default function Demo1() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      socketRef.current?.emit("call-user", {
-        to: userId,
-        offer,
-      });
+      socketRef.current?.send(
+        serialize({
+          type: "call-user",
+          payload: {
+            to: userId,
+            offer,
+          },
+        })
+      );
     },
     [createPeerConnection]
   );
 
-  useEffect(() => {
-    const socket = (socketRef.current = io("http://localhost:8888"));
+  const connectToServer = useCallback(() => {
+    const socket = (socketRef.current = new WebSocket("ws://localhost:8888"));
 
     const disposeFuncs: (() => void)[] = [];
 
-    const onConnect = () => {
-      console.log("====== connected");
+    const onOpen = () => {
+      console.log("====== open");
     };
-    socket.on("connect", onConnect);
+    socket.addEventListener("open", onOpen);
     disposeFuncs.push(() => {
-      socket.off("connect", onConnect);
+      socket.removeEventListener("open", onOpen);
     });
 
-    const onDisconnect = () => {
-      console.log("====== disconnected");
+    const onClose = () => {
+      console.log("====== close");
     };
-    socket.on("disconnect", onDisconnect);
+    socket.addEventListener("close", onClose);
     disposeFuncs.push(() => {
-      socket.off("disconnect", onDisconnect);
+      socket.removeEventListener("close", onClose);
     });
 
-    const onUserList = (data: { users: User[] }) => {
-      setUserList(data.users);
+    const onUserList = (data: { userIds: string[] }) => {
+      setUserIdList(data.userIds);
     };
-    socket.on("user-list", onUserList);
-    disposeFuncs.push(() => {
-      socket.off("user-list", onUserList);
-    });
 
-    const onAddUser = (data: { user: User }) => {
-      const newUser = data.user;
-      setUserList((pre) => {
-        if (pre.find((user) => user.id === newUser.id)) {
+    const onAddUser = (data: { userId: string }) => {
+      const newUserId = data.userId;
+      setUserIdList((pre) => {
+        if (pre.find((userId) => userId === newUserId)) {
           return pre;
         }
-        return [...pre, newUser];
+        return [...pre, newUserId];
       });
     };
-    socket.on("add-user", onAddUser);
-    disposeFuncs.push(() => {
-      socket.off("add-user", onAddUser);
-    });
 
     const onRemoveUser = (data: { userId: string }) => {
-      setUserList((pre) => pre.filter((user) => user.id !== data.userId));
+      setUserIdList((pre) => pre.filter((userId) => userId !== data.userId));
     };
-    socket.on("remove-user", onRemoveUser);
-    disposeFuncs.push(() => {
-      socket.off("remove-user", onRemoveUser);
-    });
 
     const onNewCall = async (data: NewCallData) => {
       if (pcRef.current) {
@@ -147,10 +148,15 @@ export default function Demo1() {
 
       const pc = (pcRef.current = createPeerConnection());
       pc.onicecandidate = (e) => {
-        socket.emit("new-ice-candidate", {
-          to: data.from,
-          candidate: e.candidate,
-        });
+        socket.send(
+          serialize({
+            type: "new-ice-candidate",
+            payload: {
+              to: data.from,
+              candidate: e.candidate,
+            },
+          })
+        );
       };
 
       localStream.getTracks().forEach((track) => {
@@ -161,30 +167,58 @@ export default function Demo1() {
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
-      socketRef.current?.emit("answer-user", {
-        to: data.from,
-        answer,
-      });
+      socketRef.current?.send(
+        serialize({
+          type: "answer-user",
+          payload: {
+            to: data.from,
+            answer,
+          },
+        })
+      );
     };
-    socket.on("new-call", onNewCall);
-    disposeFuncs.push(() => {
-      socket.off("new-call", onNewCall);
-    });
 
     const onNewAnswer = async (data: NewAnswerData) => {
       await pcRef.current?.setRemoteDescription(data.answer);
     };
-    socket.on("new-answer", onNewAnswer);
-    disposeFuncs.push(() => {
-      socket.off("new-answer", onNewAnswer);
-    });
 
     const onNewIceCandidate = async (data: NewIceCandidateData) => {
       await pcRef.current?.addIceCandidate(data.candidate || undefined);
     };
-    socket.on("new-ice-candidate", onNewIceCandidate);
+
+    const onMessage = (e: MessageEvent) => {
+      const { type, payload } = deserialize(e.data);
+      switch (type) {
+        case "user-list": {
+          onUserList(payload);
+          break;
+        }
+        case "add-user": {
+          onAddUser(payload);
+          break;
+        }
+        case "remove-user": {
+          onRemoveUser(payload);
+          break;
+        }
+        case "new-call": {
+          onNewCall(payload);
+          break;
+        }
+        case "new-answer": {
+          onNewAnswer(payload);
+          break;
+        }
+        case "new-ice-candidate": {
+          onNewIceCandidate(payload);
+          break;
+        }
+      }
+    };
+
+    socket.addEventListener("message", onMessage);
     disposeFuncs.push(() => {
-      socket.off("new-ice-candidate", onNewIceCandidate);
+      socket.removeEventListener("message", onMessage);
     });
 
     return () => {
@@ -195,6 +229,10 @@ export default function Demo1() {
     };
   }, [createPeerConnection]);
 
+  useEffect(() => {
+    return connectToServer();
+  }, [connectToServer]);
+
   return (
     <div>
       <Head>
@@ -204,13 +242,13 @@ export default function Demo1() {
       <main>
         <div className={styles["room"]}>
           <div className={styles["user-list"]}>
-            {userList.map((user) => (
+            {userIdList.map((userId) => (
               <div
                 className={styles["user-list-item"]}
-                key={user.id}
-                onClick={() => handleCallUser(user.id)}
+                key={userId}
+                onClick={() => handleCallUser(userId)}
               >
-                {user.id}
+                {userId}
               </div>
             ))}
           </div>
